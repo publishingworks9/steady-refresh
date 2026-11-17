@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en" data-type="software">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="page-type" content="software">
+<meta name="site-kind" content="software">
+<title>Steady Refresh: auto refresh and page alerts for Chrome</title>
+<meta name="description" content="A Chrome extension that reloads a tab on your schedule, checks that every reload happened, and alerts you when the text you're waiting for appears. No account, nothing leaves your browser.">
+<meta property="og:title" content="Steady Refresh">
+<meta property="og:description" content="Reloads on your schedule, and checks that it did.">
+<meta property="og:image" content="https://publishingworks9.github.io/steady-refresh/og.png">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../icon-128.png">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #F4F4F2; --bg-2: #EBEBE8; --surface: #FFFFFF; --surface-2: #EAEAE7;
+  --ink: #141517; --ink-2: #33363B; --muted: #55585E; --line: #E1E1DC;
+  --brand: #3F9A1C; --focus: #2F6FEB;
+  --p-bg: #111214; --p-bg-2: #0C0D0E; --p-ink: #F4F5F1; --p-muted: #A2A59F;
+  --signal: #C8F560; --p-hold: #F3C35F; --p-bad: #FF8475;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --spring: linear(0, .04, .13, .24, .354, .462, .558, .641, .711, .77, .818, .856, .887, .912, .932, .947, .959, .969, .976, .981, .986, .989, .992, .994, 1);
+  --out: cubic-bezier(.16, 1, .3, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0B0C0D; --bg-2: #111214; --surface: #161719; --surface-2: #1F2023;
+    --ink: #F2F3EF; --ink-2: #D2D4CF; --muted: #A9ACA6; --line: #26272B;
+    --brand: #6CC93D; --focus: #8AB4FF; --p-bg: #18191B; --p-bg-2: #131416;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; font: 16px/1.6 var(--font); color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; }
+::selection { background: color-mix(in srgb, var(--brand) 30%, transparent); }
+a { color: inherit; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); transition: text-decoration-color 150ms; }
+a:hover { text-decoration-color: currentColor; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+
+/* nav */
+.nav { position: absolute; z-index: 2; top: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; height: 72px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; text-decoration: none; letter-spacing: -.01em; }
+.brand svg { width: 26px; height: 26px; }
+.nav-links { display: flex; gap: 24px; font-size: 14px; color: var(--ink-2); }
+.nav-links a { text-decoration: none; }
+.nav-links a:hover { color: var(--ink); }
+
+/* hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 64px; align-items: center; min-height: 100svh; padding: 96px 32px 56px; }
+h1 { font: 600 56px/1.04 var(--display); letter-spacing: -.035em; margin: 0; text-wrap: balance; }
+.lede { font-size: 19px; line-height: 1.55; color: var(--ink-2); margin: 24px 0 36px; max-width: 30em; }
+.status-pill { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 18px 0 16px; border-radius: 12px; background: var(--ink); color: var(--bg); font-weight: 600; font-size: 15px; }
+.status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #F3C35F; box-shadow: 0 0 0 3px color-mix(in srgb, #F3C35F 25%, transparent); }
+.cta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; }
+.cta-row .quiet { font-size: 15px; color: var(--ink-2); }
+.btn { display: inline-flex; align-items: center; height: 44px; padding: 0 18px; border-radius: 12px; font-weight: 600; font-size: 15px; text-decoration: none; box-shadow: inset 0 0 0 1px var(--line), 0 1px 2px rgba(20, 21, 23, .05); background: var(--surface); color: var(--ink); transition: transform 140ms var(--out), box-shadow 150ms; }
+.btn:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 25%, transparent), 0 1px 2px rgba(20, 21, 23, .05); }
+.btn:active { transform: scale(.97); }
+.pause { position: absolute; right: 0; bottom: 0; display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 50%; background: var(--surface); color: var(--ink-2); box-shadow: 0 0 0 1px var(--line), 0 4px 12px -6px rgba(20, 21, 23, .3); cursor: pointer; transition: transform 140ms var(--out); }
+.pause:active { transform: scale(.92); }
+.pause svg { width: 14px; height: 14px; }
+.paused .clock .g, .paused .ticks span, .paused .toast { animation-play-state: paused; transition: none; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 28px 0 0; padding: 0; list-style: none; font-size: 14px; color: var(--muted); }
+.facts li { display: flex; align-items: center; gap: 8px; }
+.facts svg { width: 14px; height: 14px; color: var(--brand); }
+
+/* stage: a working copy of the popup panel over the page it watches */
+.stage { position: relative; height: 470px; }
+.page {
+  position: absolute; inset: 0 0 auto 28px; border-radius: 14px; background: var(--surface); overflow: hidden;
+  box-shadow: 0 1px 2px rgba(20, 21, 23, .06), 0 0 0 1px rgba(20, 21, 23, .06), 0 24px 48px -28px rgba(20, 21, 23, .28);
+}
+.page-bar { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #1E3A5F; color: #fff; font: 600 12px var(--font); }
+.page-body { padding: 18px 18px 20px; font-size: 12.5px; }
+.page-body .ptitle { margin: 0 0 2px; font-size: 14px; font-weight: 600; }
+.page-body .ref { color: var(--muted); font-size: 11.5px; margin-bottom: 12px; }
+.prow { display: flex; justify-content: space-between; padding: 7px 0; border-top: 1px solid var(--line); color: var(--ink-2); }
+.badge { padding: 1px 8px; border-radius: 6px; font-weight: 600; font-size: 11.5px; background: var(--surface-2); color: var(--muted); transition: background-color 300ms, color 300ms; }
+.badge.ok { background: #FFF1A8; color: #3A3000; box-shadow: 0 0 0 2px #F5D94B; }
+.page.reloading .page-body { animation: reload 600ms var(--out); }
+@keyframes reload { 0% { opacity: .25; } 100% { opacity: 1; } }
+
+.panel {
+  position: absolute; left: 0; bottom: 0; width: 344px; padding: 6px 16px 14px; border-radius: 20px; color: var(--p-ink);
+  background: linear-gradient(var(--p-bg), var(--p-bg-2));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07), 0 30px 60px -24px rgba(17, 18, 20, .6), 0 0 0 1px rgba(17, 18, 20, .9);
+  font-size: 13px;
+}
+@media (prefers-color-scheme: dark) { .panel { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px rgba(255, 255, 255, .07), 0 30px 60px -24px #000; } }
+.ptop { display: flex; align-items: center; justify-content: space-between; height: 32px; color: var(--p-ink); font-weight: 500; }
+.ptop .site { display: flex; align-items: center; gap: 8px; }
+.ptop svg { color: var(--p-muted); }
+.pstatus { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 500; color: var(--p-muted); margin-top: 4px; transition: color 250ms; }
+.pdot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 255, 255, .3); transition: background-color 250ms; }
+.panel[data-state="running"] .pstatus { color: var(--signal); } .panel[data-state="running"] .pdot { background: var(--signal); }
+.panel[data-state="held"] .pstatus { color: var(--p-hold); } .panel[data-state="held"] .pdot { background: var(--p-hold); }
+.panel[data-state="alert"] .pstatus { color: var(--p-bad); } .panel[data-state="alert"] .pdot { background: var(--p-bad); }
+.clock { display: flex; height: 60px; align-items: center; margin: 2px 0 0 -3px; font: 300 58px/1 var(--display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.cell { position: relative; display: block; overflow: hidden; padding: 4px 0; }
+.cell.sep { transform: translateY(-.05em); }
+.g { display: block; } .g.out { position: absolute; left: 0; right: 0; top: 4px; }
+.g.in { animation: g-in 440ms var(--spring) both; } .g.out { animation: g-out 440ms var(--spring) both; }
+.up .g.in { animation-name: g-in-up; } .up .g.out { animation-name: g-out-up; }
+@keyframes g-in { from { transform: translateY(-62%); opacity: 0; filter: blur(4px); } }
+@keyframes g-out { to { transform: translateY(62%); opacity: 0; filter: blur(4px); } }
+@keyframes g-in-up { from { transform: translateY(62%); opacity: 0; filter: blur(4px); } }
+@keyframes g-out-up { to { transform: translateY(-62%); opacity: 0; filter: blur(4px); } }
+.ticks { height: 10px; margin-top: 6px; background: rgba(255, 255, 255, .14);
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 2px, transparent 2px 6px); mask: repeating-linear-gradient(90deg, #000 0 2px, transparent 2px 6px); }
+.ticks span { display: block; height: 100%; background: var(--signal); transform: scaleX(0); transform-origin: left; transition: transform 260ms linear, background-color 300ms; }
+.panel[data-state="held"] .ticks span { background: var(--p-hold); }
+.panel[data-state="alert"] .ticks span { background: var(--p-bad); }
+.phealth { display: flex; justify-content: space-between; margin-top: 10px; font-size: 12px; color: var(--p-muted); }
+.phealth b { color: var(--p-ink); font-weight: 600; text-decoration: underline; text-decoration-color: rgba(255, 255, 255, .25); text-underline-offset: 3px; }
+
+.toast {
+  position: absolute; right: 12px; top: -22px; width: 290px; display: flex; gap: 12px; padding: 12px 14px; border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 0 0 1px rgba(20, 21, 23, .08), 0 18px 40px -18px rgba(20, 21, 23, .4);
+  font-size: 12.5px; line-height: 1.4; opacity: 0; transform: translateY(-10px) scale(.97); transform-origin: top right; z-index: 2;
+  transition: opacity 300ms var(--out), transform 500ms var(--spring);
+}
+.toast.show { opacity: 1; transform: none; }
+.toast svg { flex: none; width: 28px; height: 28px; }
+.toast b { display: block; font-size: 13px; }
+.toast span { color: var(--muted); }
+
+/* sections */
+section.band { min-height: 100svh; display: grid; align-content: center; padding: 96px 0; }
+section.band:nth-of-type(odd) { background: var(--bg-2); }
+section.band.last { grid-template-rows: 1fr auto; align-content: stretch; padding-bottom: 0; }
+section.band.last > .wrap.split { align-self: center; }
+.split { display: grid; grid-template-columns: 5fr 7fr; gap: 64px; align-items: start; }
+h2 { font: 600 44px/1.08 var(--display); letter-spacing: -.03em; margin: 0 0 20px; text-wrap: balance; }
+.split p { margin: 0 0 16px; color: var(--ink-2); font-size: 18px; }
+.split .btn { margin-top: 12px; }
+.win { border-radius: 16px; overflow: hidden; background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
+.win-head { display: flex; align-items: center; gap: 10px; padding: 10px 18px; background: var(--surface-2); font-size: 13px; font-weight: 600; }
+.win-head svg { width: 16px; height: 16px; }
+.win .log { border-radius: 0; box-shadow: none; }
+.health { display: flex; align-items: center; gap: 10px; margin-top: 16px; padding: 16px 20px; border-radius: 16px; background: linear-gradient(var(--p-bg), var(--p-bg-2)); color: var(--p-muted); font-size: 14px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07); }
+.health i { width: 7px; height: 7px; border-radius: 50%; background: var(--signal); flex: none; }
+.health b { color: var(--p-ink); font-weight: 500; }
+
+.log { margin: 0; padding: 8px 0; list-style: none; border-radius: 16px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); font: 14px/1.5 var(--mono); }
+.log li { display: grid; grid-template-columns: 104px 18px minmax(0, 1fr); align-items: center; gap: 10px; padding: 16px 24px; font-size: 15px; }
+.log li + li { border-top: 1px solid var(--line); }
+.log time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.log i { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
+.log .miss i { background: #E0A63A; }
+.log .miss span { color: var(--ink); }
+.log span { font-family: var(--font); color: var(--ink-2); }
+
+.rows { border-radius: 16px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); overflow: hidden; }
+.r { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 24px; }
+.r + .r { border-top: 1px solid var(--line); }
+.r b { display: block; font-weight: 500; font-size: 17px; }
+.r span { color: var(--muted); font-size: 14px; }
+.sw { flex: none; position: relative; width: 38px; height: 23px; border-radius: 12px; background: #34C759; }
+.sw::after { content: ""; position: absolute; top: 2px; left: 17px; width: 19px; height: 19px; border-radius: 10px; background: #fff; box-shadow: 0 2px 4px rgba(0, 0, 0, .16); }
+
+.net { border-radius: 16px; overflow: hidden; background: var(--surface); box-shadow: 0 0 0 1px var(--line); margin-bottom: 16px; font-size: 13px; }
+.net-head { display: flex; align-items: center; gap: 10px; padding: 10px 18px; background: var(--surface-2); color: var(--muted); font-weight: 500; }
+.net-head b { color: var(--ink); font-weight: 600; }
+.net-body { display: grid; place-items: center; gap: 4px; padding: 36px 18px 38px; text-align: center; }
+.net-body strong { font: 300 36px/1 var(--display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.net-body span { color: var(--muted); }
+.no { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; border-radius: 16px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
+.no li { display: flex; gap: 14px; padding: 18px 24px; align-items: baseline; }
+.no li + li { border-top: 1px solid var(--line); }
+.no b { font-weight: 500; min-width: 170px; }
+.no span { color: var(--muted); font-size: 15px; }
+
+footer { margin-top: 72px; padding: 24px 0 40px; font-size: 14px; color: var(--muted); }
+footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+.rise { animation: rise 700ms var(--out) both; }
+.rise.d1 { animation-delay: 80ms; } .rise.d2 { animation-delay: 160ms; }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+
+@media (max-width: 920px) {
+  .hero { grid-template-columns: minmax(0, 1fr); gap: 48px; padding: 40px 0 80px; }
+  .stage { max-width: 420px; margin-bottom: 24px; }
+  .hero { padding: 96px 32px 56px; }
+  section.band { min-height: 0; }
+  .split { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  h1 { font-size: 42px; }
+  section.band { padding: 72px 0; }
+}
+@media (max-width: 480px) {
+  .wrap, .hero { padding-left: 20px; padding-right: 20px; }
+  h1 { font-size: 36px; }
+  h2 { font-size: 28px; }
+  .stage { height: 440px; }
+  .page { left: 16px; }
+  .panel { width: calc(100% - 48px); }
+  .toast { right: 8px; width: 250px; }
+  .no li { flex-direction: column; gap: 2px; }
+  .log li { grid-template-columns: 80px 14px minmax(0, 1fr); padding: 12px 16px; font-size: 13px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition-duration: 1ms !important; }
+}
+</style>
+</head>
+<body>
+<header class="wrap nav">
+  <a class="brand" href="../" aria-label="Steady Refresh home">
+    <svg viewBox="0 0 128 128" aria-hidden="true"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="var(--brand)" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="var(--brand)" stroke="var(--brand)" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="var(--brand)"/></svg>
+    Steady Refresh
+  </a>
+  <nav class="nav-links" aria-label="Main">
+    <a href="#keeps-going">How it works</a>
+    <a href="../privacy.html">Privacy</a>
+  </nav>
+</header>
+
+<main>
+  <div class="hero" style="max-width:1080px;margin:0 auto">
+    <div>
+      <h1 class="rise">Auto refresh for Chrome that checks every reload happened.</h1>
+      <p class="lede rise d1">Steady Refresh reloads a tab on the schedule you set and tells you the moment the text you're waiting for appears. No account, no tracking, and nothing leaves your browser.</p>
+      <div class="cta-row rise d2">
+        <span class="status-pill"><span class="dot" aria-hidden="true"></span>In review at the Chrome Web Store</span>
+        <a class="btn" href="#keeps-going">See how it works</a>
+      </div>
+      <ul class="facts rise d2">
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>1 second to 24 hours</li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Alerts on text</li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>No network requests</li>
+      </ul>
+    </div>
+
+    <div class="stage" aria-label="Example: Steady Refresh watching a permit application until it says Approved" role="img">
+      <div class="page" id="page" aria-hidden="true">
+        <div class="page-bar">Northwind Permits</div>
+        <div class="page-body">
+          <div class="ptitle">Building permit application</div>
+          <div class="ref">Reference NP-2026-04817 · Submitted 3 November 2026</div>
+          <div class="prow"><span>Status</span><span class="badge" id="badge">In review</span></div>
+          <div class="prow"><span>Assigned officer</span><span>J. Alvarez</span></div>
+          <div class="prow"><span>Last updated</span><span id="updated">17 November, 10:37</span></div>
+        </div>
+      </div>
+
+      <div class="toast" id="toast" aria-hidden="true">
+        <svg viewBox="0 0 128 128"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="#5DBB2E" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="#5DBB2E" stroke="#5DBB2E" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="#5DBB2E"/></svg>
+        <div><b>Approved</b><span>Appeared on permits.northwind.example</span></div>
+      </div>
+
+      <button class="pause" id="pause" type="button" aria-label="Pause the demo"><svg viewBox="0 0 14 14" aria-hidden="true"><path id="pauseIcon" d="M3.5 2v10M10.5 2v10" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg></button>
+      <div class="panel" id="panel" data-state="running" aria-hidden="true">
+        <div class="ptop">
+          <span class="site"><svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.8 8h12.4M8 1.7c2 2.3 2 10.3 0 12.6M8 1.7c-2 2.3-2 10.3 0 12.6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>permits.northwind.example</span>
+          <svg viewBox="0 0 20 20" width="18" height="18"><path d="M3.5 6h8M15.5 6h1M3.5 14h1M8.5 14h8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="13.5" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="6.5" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+        </div>
+        <div class="pstatus"><span class="pdot"></span><span id="pstatus">Refreshing every 5 s</span></div>
+        <div class="clock" id="clock"></div>
+        <div class="ticks"><span id="bar"></span></div>
+        <div class="phealth"><span id="phealth">Last refresh 5 s ago · 36 refreshes</span><b>Refresh now</b></div>
+      </div>
+    </div>
+  </div>
+
+  <section class="band" id="keeps-going">
+    <div class="wrap split">
+      <div>
+        <h2>A 30-second check catches missed reloads</h2>
+        <p>Chrome puts idle extensions to sleep, and a lot of auto-refreshers lose their timer when that happens. The countdown keeps showing, but the page never reloads.</p>
+        <p>Steady Refresh keeps its schedule in Chrome's storage and checks every 30 seconds that each tab is on time. A missed turn gets made up, and a page that hangs while loading is tried again.</p>
+      </div>
+      <div>
+      <div class="win">
+      <div class="win-head"><svg viewBox="0 0 128 128" aria-hidden="true"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="var(--brand)" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="var(--brand)" stroke="var(--brand)" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="var(--brand)"/></svg>Example: a tab set to reload every 5 minutes</div>
+      <ol class="log" aria-label="Example reload log">
+        <li><time>09:00:00</time><i></i><span>Reloaded</span></li>
+        <li><time>09:05:00</time><i></i><span>Reloaded</span></li>
+        <li class="miss"><time>09:10:00</time><i></i><span>Missed while Chrome was asleep</span></li>
+        <li><time>09:10:30</time><i></i><span>Caught up by the 30-second check</span></li>
+        <li><time>09:15:00</time><i></i><span>Reloaded, back on schedule</span></li>
+      </ol>
+      </div>
+      <div class="health" aria-label="The popup's status line after a recovered reload"><i aria-hidden="true"></i><span><b>Last refresh 1 min ago</b> · 37 refreshes · 1 stalled load retried</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap split">
+      <div>
+        <h2>Pause, scroll and hours, one switch each</h2>
+        <p>It waits while you're typing, keeps your place on the page, and only runs when you want it to. Every option is one switch in the popup.</p>
+      </div>
+      <div class="rows">
+        <div class="r"><div><b>Pause while I'm using the page</b><span>Carries on 15 seconds after you stop typing, clicking or scrolling</span></div><span class="sw" aria-hidden="true"></span></div>
+        <div class="r"><div><b>Keep my scroll position</b><span>Returns to the same spot after each reload</span></div><span class="sw" aria-hidden="true"></span></div>
+        <div class="r"><div><b>Alert me</b><span>When text appears, disappears, or anything on the page changes</span></div><span class="sw" aria-hidden="true"></span></div>
+        <div class="r"><div><b>Only during set hours</b><span>With a weekdays-only option</span></div><span class="sw" aria-hidden="true"></span></div>
+        <div class="r"><div><b>Start automatically on this page</b><span>Picks up again the next time the address opens</span></div><span class="sw" aria-hidden="true"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band last">
+    <div class="wrap split">
+      <div>
+        <h2>No account and no network requests</h2>
+        <p>The text on your pages is checked on your own computer. Site access is asked for one site at a time, and only for the features that need it.</p>
+        <a class="btn" href="../privacy.html">Read the privacy policy</a>
+      </div>
+      <div>
+      <div class="net" aria-label="Network requests made by the extension">
+        <div class="net-head"><svg viewBox="0 0 128 128" aria-hidden="true" width="16" height="16"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="var(--brand)" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="var(--brand)" stroke="var(--brand)" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="var(--brand)"/></svg><b>Network</b><span>Steady Refresh · service worker</span></div>
+        <div class="net-body"><strong>0</strong><span>requests, ever</span></div>
+      </div>
+      <ul class="no">
+        <li><b>No account</b><span>Install it and press Start.</span></li>
+        <li><b>No analytics or ads</b><span>Nothing measures how you use it.</span></li>
+        <li><b>No network requests</b><span>The extension never contacts a server, ours or anyone else's.</span></li>
+        <li><b>No page text stored</b><span>Text is read in memory to check your alert, then let go.</span></li>
+      </ul>
+      </div>
+    </div>
+    <footer>
+      <div class="wrap"><span>Steady Refresh for Chrome</span><a href="../privacy.html">Privacy policy</a></div>
+    </footer>
+  </section>
+</main>
+
+
+<script>
+// The hero plays a real session: count down, reload, and on the third reload "Approved" appears.
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const panel = $('panel'), clock = $('clock'), bar = $('bar'), status = $('pstatus'), health = $('phealth');
+  const page = $('page'), badge = $('badge'), toast = $('toast'), updated = $('updated');
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const fmt = (s) => `0:${String(Math.max(0, s)).padStart(2, '0')}`;
+
+  function setClock(text, up) {
+    const prev = clock.dataset.v || '';
+    clock.dataset.v = text;
+    clock.classList.toggle('up', !!up);
+    if (prev.length !== text.length || still) {
+      clock.replaceChildren(...[...text].map((ch) => {
+        const c = document.createElement('span'); c.className = ch === ':' ? 'cell sep' : 'cell';
+        const g = document.createElement('span'); g.className = 'g'; g.textContent = ch; c.append(g); return c;
+      }));
+      return;
+    }
+    [...text].forEach((ch, i) => {
+      const cell = clock.children[i], cur = cell.querySelector('.g:not(.out)');
+      if (!cur || cur.textContent === ch) return;
+      cell.querySelectorAll('.out').forEach((n) => n.remove());
+      cur.className = 'g out';
+      cur.addEventListener('animationend', () => cur.remove(), { once: true });
+      const g = document.createElement('span'); g.className = 'g in'; g.textContent = ch; cell.append(g);
+    });
+  }
+
+  if (still) {
+    panel.dataset.state = 'alert'; status.textContent = '"Approved" appeared';
+    setClock('0:12'); bar.style.transform = 'scaleX(1)';
+    health.textContent = 'Stopped so you can take a look';
+    badge.textContent = 'Approved'; badge.classList.add('ok'); toast.classList.add('show');
+    return;
+  }
+
+  let paused = false, pending = null;
+  const later = (fn, ms) => { pending = [fn, ms]; return setTimeout(() => { if (paused) return; pending = null; fn(); }, ms); };
+  const btn = $('pause'), icon = $('pauseIcon');
+  btn.addEventListener('click', () => {
+    paused = !paused;
+    document.querySelector('.stage').classList.toggle('paused', paused);
+    btn.setAttribute('aria-label', paused ? 'Play the demo' : 'Pause the demo');
+    icon.setAttribute('d', paused ? 'M4 2.2v9.6L12 7z' : 'M3.5 2v10M10.5 2v10');
+    if (!paused && pending) { const [fn] = pending; pending = null; setTimeout(fn, 300); }
+  });
+  const INTERVAL = 5;
+  let count = 36, round = 0, t = INTERVAL, alertAt = 0;
+  setClock(fmt(t));
+  function tick() {
+    if (panel.dataset.state === 'alert') {
+      alertAt++;
+      setClock(fmt(alertAt), true);
+      if (alertAt >= 6) return reset();
+      return later(tick, 1000);
+    }
+    t--;
+    setClock(fmt(t));
+    bar.style.transform = `scaleX(${(INTERVAL - t) / INTERVAL})`;
+    if (t > 0) return later(tick, 1000);
+    // Reload
+    panel.dataset.state = 'held'; status.textContent = 'Refreshing…';
+    page.classList.remove('reloading'); void page.offsetWidth; page.classList.add('reloading');
+    later(() => {
+      count++; round++;
+      health.textContent = `Last refresh just now · ${count} refreshes`;
+      if (round === 3) {
+        badge.textContent = 'Approved'; badge.classList.add('ok'); updated.textContent = '17 November, 10:42';
+        panel.dataset.state = 'alert'; status.textContent = '"Approved" appeared';
+        health.textContent = 'Stopped so you can take a look';
+        bar.style.transform = 'scaleX(1)';
+        later(() => toast.classList.add('show'), 250);
+        alertAt = 0; setClock(fmt(0), true);
+        return later(tick, 1000);
+      }
+      panel.dataset.state = 'running'; status.textContent = `Refreshing every ${INTERVAL} s`;
+      t = INTERVAL; setClock(fmt(t), true); bar.style.transform = 'scaleX(0)';
+      later(tick, 1000);
+    }, 700);
+  }
+  function reset() {
+    toast.classList.remove('show');
+    badge.textContent = 'In review'; badge.classList.remove('ok'); updated.textContent = '17 November, 10:37';
+    panel.dataset.state = 'running'; status.textContent = `Refreshing every ${INTERVAL} s`;
+    count = 36; round = 0; t = INTERVAL;
+    health.textContent = 'Last refresh 5 s ago · 36 refreshes';
+    setClock(fmt(t), true); bar.style.transform = 'scaleX(0)';
+    later(tick, 1400);
+  }
+  later(tick, 1200);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,758 @@
+<!doctype html>
+<html lang="en" data-type="software">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="page-type" content="software">
+<meta name="site-kind" content="software">
+<title>Steady Refresh: auto refresh and page alerts for Chrome</title>
+<meta name="description" content="A Chrome extension that reloads a tab on your schedule, checks that every reload happened, and alerts you when the text you're waiting for appears. No account, nothing leaves your browser.">
+<meta property="og:title" content="Steady Refresh">
+<meta property="og:description" content="Reloads on your schedule, and checks that it did.">
+<meta property="og:image" content="https://publishingworks9.github.io/steady-refresh/og.png">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../icon-128.png">
+<!--
+  Homepage v2. Self-hosted libraries in ./vendor, nothing loads from another host:
+    gsap.min.js, ScrollTrigger.min.js  GSAP 3.15.1 (npm "gsap"), GreenSock Standard "no charge" licence, https://gsap.com/standard-license
+    lenis.min.js (+ .map)              Lenis 1.3.27 (npm "lenis"), MIT licence, vendor/LICENSE-lenis.txt
+  No web fonts, no analytics, no third-party requests.
+  Without script, or under reduced motion, every scene shows its finished state.
+-->
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #F4F4F2; --bg-2: #EBEBE8; --surface: #FFFFFF; --surface-2: #EAEAE7;
+  --ink: #141517; --ink-2: #33363B; --muted: #55585E; --line: #E1E1DC; --line-strong: #CDCDC8;
+  --brand: #3F9A1C; --focus: #2F6FEB; --ok: #1D8A4E;
+  --p-bg: #111214; --p-bg-2: #0C0D0E; --p-ink: #F4F5F1; --p-muted: #A2A59F;
+  --signal: #C8F560; --p-hold: #F3C35F; --p-bad: #FF8475;
+  --thumb: #FFFFFF; --thumb-shadow: 0 1px 2px rgba(20, 21, 23, .14), 0 0 0 .5px rgba(20, 21, 23, .06);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  /* Critically damped spring (response .42 s, no overshoot), sampled for CSS: the extension's own curve. */
+  --spring: linear(0, .04, .13, .24, .354, .462, .558, .641, .711, .77, .818, .856, .887, .912, .932, .947, .959, .969, .976, .981, .986, .989, .992, .994, 1);
+  --out: cubic-bezier(.16, 1, .3, 1);
+  --padt: 120px; --padb: 72px; --gut: 64px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0B0C0D; --bg-2: #111214; --surface: #161719; --surface-2: #1F2023;
+    --ink: #F2F3EF; --ink-2: #D2D4CF; --muted: #A9ACA6; --line: #26272B; --line-strong: #37383D;
+    --brand: #6CC93D; --focus: #8AB4FF; --ok: #3FC27A; --p-bg: #18191B; --p-bg-2: #131416;
+    --thumb: #3A3B40; --thumb-shadow: 0 1px 2px rgba(0, 0, 0, .4), inset 0 .5px 0 rgba(255, 255, 255, .08);
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 0; }
+html.lenis, html.lenis body { height: auto; }
+.lenis.lenis-stopped { overflow: clip; }
+body { margin: 0; font: 16px/1.6 var(--font); color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; overflow-x: clip; }
+::selection { background: color-mix(in srgb, var(--brand) 30%, transparent); }
+a { color: inherit; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); transition: text-decoration-color 150ms, color 150ms; }
+a:hover { text-decoration-color: currentColor; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
+button { font: inherit; color: inherit; }
+.wrap { position: relative; z-index: 1; width: min(1200px, calc(100% - 2 * var(--gut))); margin: 0 auto; }
+.mark { flex: none; }
+
+/* ---------- nav ---------- */
+.nav { position: absolute; z-index: 5; top: 0; left: 0; right: 0; height: 72px; }
+.nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 100%; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; text-decoration: none; letter-spacing: -.01em; }
+.brand svg { width: 26px; height: 26px; }
+.nav-links { display: flex; gap: 24px; font-size: 15px; color: var(--ink-2); }
+.nav-links a { text-decoration: none; }
+.nav-links a:hover { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-strong); }
+
+/* ---------- sections: one or two screens each ---------- */
+main > section { position: relative; height: calc(var(--h, 1) * 100svh); padding: var(--padt) 0 var(--padb); }
+main > section:nth-of-type(even) { background: var(--bg-2); }
+h1 { font: 600 clamp(40px, min(4.4vw, 7.2svh), 62px)/1.02 var(--display); letter-spacing: -.04em; margin: 0; text-wrap: balance; }
+h2 { font: 600 clamp(30px, min(3.2vw, 5.1svh), 46px)/1.06 var(--display); letter-spacing: -.035em; margin: 0 0 20px; text-wrap: balance; }
+.split { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 24px; align-items: start; }
+.split > :first-child { grid-column: 1 / 6; padding-right: 24px; }
+.split > :last-child { grid-column: 6 / 13; }
+.copy p, .step p, .lede { text-wrap: pretty; }
+.copy p { margin: 0 0 16px; color: var(--ink-2); font-size: 18px; max-width: 30em; }
+.btn { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 18px; border-radius: 12px; font-weight: 600; font-size: 15px; text-decoration: none; background: var(--surface); color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--ink); transition: transform 140ms var(--out), box-shadow 150ms, background-color 150ms; }
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: scale(.97); }
+.btn svg { width: 14px; height: 14px; transition: transform 200ms var(--out); }
+.btn:hover svg { transform: translateY(2px); }
+
+/* ---------- hero ---------- */
+.hero { height: 100svh; padding: var(--padt) 0 48px; }
+.hero > .wrap, .hero-text { height: 100%; }
+.lede { font-size: 19px; line-height: 1.55; color: var(--ink-2); margin: 24px 0 32px; max-width: 30em; }
+.cta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 16px; }
+.status-pill { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 18px 0 16px; border-radius: 12px; background: var(--ink); color: var(--bg); font-weight: 600; font-size: 15px; }
+.status-pill i { width: 8px; height: 8px; border-radius: 50%; background: #F3C35F; box-shadow: 0 0 0 3px color-mix(in srgb, #F3C35F 28%, transparent); }
+.facts { margin: 24px 0 0; font-size: 15px; color: var(--muted); }
+.facts span { padding: 0 4px; }
+
+/* ---------- browser window replica ---------- */
+.stage { position: relative; }
+.hero .stage { height: min(560px, calc(100svh - 170px)); }
+.win { position: absolute; inset: 0; overflow: hidden; border-radius: 14px; background: var(--surface); box-shadow: 0 0 0 1px rgba(20, 21, 23, .08), 0 1px 2px rgba(20, 21, 23, .06), 0 30px 60px -36px rgba(20, 21, 23, .35); }
+@media (prefers-color-scheme: dark) { .win { box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 30px 60px -30px #000; } }
+.tabs { display: flex; align-items: flex-end; gap: 14px; height: 38px; padding: 0 12px; background: var(--surface-2); }
+.lights { display: flex; gap: 7px; align-self: center; }
+.lights i { width: 11px; height: 11px; border-radius: 50%; background: var(--line-strong); }
+.tab { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px; border-radius: 10px 10px 0 0; background: var(--surface); font-size: 12px; font-weight: 500; color: var(--ink-2); }
+.fav { width: 12px; height: 12px; border-radius: 3px; background: #1E3A5F; }
+.toolbar { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-bottom: 1px solid var(--line); color: var(--muted); }
+.toolbar > svg { width: 15px; height: 15px; flex: none; }
+.url { flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; padding: 0 12px; border-radius: 14px; background: var(--surface-2); font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.url b { color: var(--ink); font-weight: 400; }
+.ext { position: relative; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.ext svg { width: 16px; height: 16px; }
+.bdg { position: absolute; right: -6px; bottom: -3px; min-width: 18px; height: 13px; padding: 0 3px; border-radius: 4px; background: var(--signal); color: #111214; font: 600 9.5px/13px var(--font); text-align: center; font-variant-numeric: tabular-nums; transition: background-color 200ms, color 200ms; }
+.bdg.held { background: var(--p-hold); }
+.bdg.alert { background: #C2362B; color: #fff; }
+
+.site-bar { height: 44px; display: flex; align-items: center; gap: 20px; padding: 0 20px; background: #1E3A5F; color: #fff; font-size: 12.5px; }
+.site-bar b { font-weight: 600; }
+.site-bar span { color: rgba(255, 255, 255, .78); }
+.site-body { padding: 22px 20px; max-width: calc(100% - 378px); font-size: 12.5px; transition: opacity 180ms var(--out); }
+.site-body.reloading { opacity: .3; }
+.site-brand { margin: 0 0 18px; font-weight: 700; font-size: 13px; color: #1E3A5F; }
+@media (prefers-color-scheme: dark) { .site-brand { color: #8DB4E2; } }
+.site-body .ptitle { margin: 0 0 2px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.site-body .ref { color: var(--muted); font-size: 11.5px; margin-bottom: 14px; }
+.prow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
+.prow > span:first-child { color: var(--muted); }
+.badge { padding: 1px 8px; border-radius: 6px; font-weight: 600; font-size: 11.5px; background: var(--surface-2); color: var(--muted); transition: background-color 300ms, color 300ms, box-shadow 300ms; }
+.badge.ok { background: #FFF1A8; color: #3A3000; box-shadow: 0 0 0 2px #F5D94B; }
+.lines { margin-top: 18px; display: grid; gap: 8px; }
+.lines i { display: block; height: 7px; border-radius: 4px; background: var(--surface-2); }
+.lines i:nth-child(2), .lines i:nth-child(6) { width: 82%; } .lines i:nth-child(3), .lines i:nth-child(8) { width: 64%; }
+.lines i.gap { height: 10px; margin-top: 14px; width: 40%; background: color-mix(in srgb, var(--ink) 14%, transparent); }
+
+/* ---------- the popup, built from the extension's own popup.css ---------- */
+.pop { position: absolute; z-index: 2; top: 86px; right: 14px; width: 344px; display: grid; gap: 8px; padding: 8px; border-radius: 14px; background: var(--bg); font-size: 13px; line-height: 1.45; box-shadow: 0 0 0 1px rgba(20, 21, 23, .1), 0 24px 48px -20px rgba(20, 21, 23, .45); transform-origin: calc(100% - 60px) -10px; }
+@media (prefers-color-scheme: dark) { .pop { box-shadow: 0 0 0 1px rgba(255, 255, 255, .1), 0 24px 48px -16px #000; } }
+.js .hero .pop { animation: pop-open 700ms var(--spring) 250ms both; }
+@keyframes pop-open { from { opacity: 0; transform: translateY(-8px) scale(.96); } }
+.ip { position: relative; padding: 6px 16px 12px; border-radius: 20px; color: var(--p-ink); background: linear-gradient(var(--p-bg), var(--p-bg-2)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07), 0 10px 24px -14px rgba(17, 18, 20, .55), 0 0 0 1px rgba(17, 18, 20, .9); }
+@media (prefers-color-scheme: dark) { .ip { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px rgba(255, 255, 255, .06); } }
+.ptop { display: flex; align-items: center; justify-content: space-between; height: 32px; font-weight: 500; }
+.ptop span { display: flex; align-items: center; gap: 8px; }
+.ptop svg { color: var(--p-muted); }
+.pstatus { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; font-weight: 500; color: var(--p-muted); transition: color 250ms; white-space: nowrap; }
+.pdot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 255, 255, .3); transition: background-color 250ms; }
+[data-state="running"] .pstatus { color: var(--signal); } [data-state="running"] .pdot { background: var(--signal); }
+[data-state="held"] .pstatus { color: var(--p-hold); } [data-state="held"] .pdot { background: var(--p-hold); }
+[data-state="alert"] .pstatus { color: var(--p-bad); } [data-state="alert"] .pdot { background: var(--p-bad); }
+.clock { display: flex; height: 60px; align-items: center; margin: 2px 0 0 -3px; font: 300 58px/1 var(--display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.cell { position: relative; display: block; overflow: hidden; padding: 4px 0; }
+.cell.sep { padding-right: .03em; transform: translateY(-.05em); }
+.g { display: block; }
+.g.out { position: absolute; left: 0; right: 0; top: 4px; }
+.g.in { animation: g-in 440ms var(--spring) both; } .g.out { animation: g-out 440ms var(--spring) both; }
+.up .g.in { animation-name: g-in-up; } .up .g.out { animation-name: g-out-up; }
+@keyframes g-in { from { transform: translateY(-62%); opacity: 0; filter: blur(4px); } }
+@keyframes g-out { to { transform: translateY(62%); opacity: 0; filter: blur(4px); } }
+@keyframes g-in-up { from { transform: translateY(62%); opacity: 0; filter: blur(4px); } }
+@keyframes g-out-up { to { transform: translateY(-62%); opacity: 0; filter: blur(4px); } }
+.ticks { height: 10px; margin-top: 6px; background: rgba(255, 255, 255, .14); -webkit-mask: repeating-linear-gradient(90deg, #000 0 2px, transparent 2px 6px); mask: repeating-linear-gradient(90deg, #000 0 2px, transparent 2px 6px); }
+.ticks span { display: block; height: 100%; background: var(--signal); transform: scaleX(var(--p, 0)); transform-origin: left; transition: transform 260ms linear, background-color 300ms; }
+[data-state="held"] .ticks span { background: var(--p-hold); }
+[data-state="alert"] .ticks span { background: var(--p-bad); }
+.phealth { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 12px; color: var(--p-muted); white-space: nowrap; }
+.phealth b { color: var(--p-ink); font-weight: 600; text-decoration: underline; text-decoration-color: rgba(255, 255, 255, .25); text-underline-offset: 3px; }
+
+.blk { display: grid; gap: 8px; padding: 0 4px; }
+.blk-head { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.blk-head span { font-weight: 400; color: var(--muted); }
+.seg { position: relative; isolation: isolate; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)) minmax(0, 1.55fr); padding: 2px; border-radius: 10px; background: var(--surface-2); }
+.seg.three { grid-template-columns: repeat(3, 1fr); }
+.seg > span { position: relative; height: 30px; display: grid; place-items: center; border-radius: 8px; font-weight: 500; font-size: 12.5px; color: var(--ink-2); }
+.seg > .on { background: var(--thumb); box-shadow: var(--thumb-shadow); color: var(--ink); font-weight: 600; }
+.seg.three > span { font-size: 11.5px; }
+.card { background: var(--surface); border-radius: 14px; box-shadow: 0 1px 2px rgba(20, 21, 23, .05), 0 0 0 1px rgba(20, 21, 23, .045); }
+@media (prefers-color-scheme: dark) { .card { box-shadow: 0 0 0 1px rgba(255, 255, 255, .05); } }
+.row { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; }
+.row + .row::before { content: ""; position: absolute; top: 0; left: 14px; right: 0; height: 1px; background: var(--line); }
+.row-text { display: grid; gap: 1px; min-width: 0; }
+.row-title { font-weight: 500; }
+.row-sub { color: var(--muted); font-size: 11.5px; }
+.sw { position: relative; flex: none; width: 38px; height: 23px; }
+.sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+.sw span { position: absolute; inset: 0; border-radius: 12px; background: var(--line-strong); transition: background-color 250ms var(--out); }
+.sw span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 19px; height: 19px; border-radius: 10px; background: #fff; box-shadow: 0 2px 4px rgba(0, 0, 0, .16), 0 0 0 .5px rgba(0, 0, 0, .04); transition: transform 500ms var(--spring), width 220ms var(--out); }
+.sw input:active + span::after { width: 23px; }
+.sw input:checked + span { background: var(--ok); }
+.sw input:checked + span::after { transform: translateX(15px); }
+.sw input:checked:active + span::after { transform: translateX(11px); }
+.sw input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 2px; }
+.sw.static span { transition: none; }
+.alertbox { display: grid; gap: 8px; padding: 0 14px 12px; }
+.field { height: 32px; display: flex; align-items: center; padding: 0 10px; border-radius: 8px; border: 1px solid var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 22%, transparent); background: var(--surface); }
+.caret { display: inline-block; width: 1.5px; height: 15px; margin-left: 1px; background: var(--focus); opacity: 0; }
+.typing .caret { opacity: 1; }
+.checks { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); }
+.checks span { display: flex; align-items: center; gap: 6px; }
+.checks i { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--line-strong); background: var(--surface); }
+.checks i.on { background: var(--ok) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.5 7.2 6 9.6l4.6-5' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px; border-color: var(--ok); }
+
+.toast { position: absolute; z-index: 3; top: 10px; right: 14px; width: 300px; display: flex; gap: 12px; padding: 12px 14px; border-radius: 14px; font-size: 12.5px; line-height: 1.4; background: color-mix(in srgb, var(--surface) 90%, transparent); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%); box-shadow: 0 0 0 1px rgba(20, 21, 23, .08), 0 18px 40px -18px rgba(20, 21, 23, .45); opacity: 0; transform: translateY(-10px) scale(.97); transform-origin: top right; transition: opacity 300ms var(--out), transform 500ms var(--spring); }
+@media (prefers-color-scheme: dark) { .toast { box-shadow: 0 0 0 1px rgba(255, 255, 255, .1), 0 18px 40px -18px #000; } }
+.toast.show { opacity: 1; transform: none; }
+.toast svg { flex: none; width: 28px; height: 28px; }
+.toast b { display: block; font-size: 13px; }
+.toast span { color: var(--muted); }
+
+.pause { position: absolute; z-index: 4; right: 12px; bottom: 12px; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--ink); color: var(--bg); cursor: pointer; transition: transform 140ms var(--out), opacity 150ms; }
+.pause:hover { opacity: .85; }
+.pause:active { transform: scale(.92); }
+.pause svg { width: 12px; height: 12px; }
+html:not(.js) .pause, .still .pause { display: none; }
+
+/* ---------- scene: pinned while the scroll plays the watch ---------- */
+#watch { --h: 2; padding: 0; }
+#watch > .wrap { position: sticky; top: 0; height: 100svh; padding: var(--padt) 0 var(--padb); }
+.steps { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.step { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr); padding: 16px 0; border-top: 1px solid var(--line); }
+.step:last-child { border-bottom: 1px solid var(--line); }
+.step em { font: 500 13px/1.6 var(--mono); font-style: normal; color: var(--muted); padding-top: 3px; }
+.step b { display: block; font-size: 19px; font-weight: 600; letter-spacing: -.01em; color: var(--ink); transition: color 250ms; }
+.step p { margin: 4px 0 0; font-size: 16px; color: var(--ink-2); }
+.step::after { content: ""; position: absolute; left: 0; top: -1px; height: 2px; width: 100%; background: var(--ink); transform: scaleX(var(--s, 0)); transform-origin: left; }
+.js:not(.still) .step { color: var(--muted); }
+.js:not(.still) .step:not(.on) b { color: var(--muted); }
+.js:not(.still) .step:not(.on) p { color: var(--muted); }
+.js:not(.still) .step.on em { color: var(--ink); }
+.scene-stage { height: 100%; max-height: 560px; }
+.scene-stage .pop { top: 86px; }
+.scene-stage .toast { top: auto; bottom: 14px; right: auto; left: 20px; transform-origin: bottom left; }
+
+/* ---------- keeps going: the 30-second check ---------- */
+.track { padding: 20px 24px 22px; border-radius: 20px; color: var(--p-ink); background: linear-gradient(var(--p-bg), var(--p-bg-2)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07), 0 0 0 1px rgba(17, 18, 20, .9), 0 30px 60px -36px rgba(17, 18, 20, .6); }
+@media (prefers-color-scheme: dark) { .track { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px rgba(255, 255, 255, .07); } }
+.track-head { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--p-muted); }
+.track-head svg { width: 16px; height: 16px; }
+.track .clock { margin-top: 14px; font-size: 52px; height: 56px; }
+.track .pstatus { font-size: 13px; margin-top: 2px; }
+.ruler { position: relative; margin-top: 28px; padding-top: 22px; }
+.ruler .ticks { height: 14px; margin: 0; }
+.ruler .ticks span { transition: none; }
+.ev { position: absolute; top: 0; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .28); background: transparent; transition: background-color 200ms, border-color 200ms, transform 300ms var(--spring); }
+.ev.hit { background: var(--signal); border-color: var(--signal); }
+.ev.miss.hit { background: transparent; border-color: var(--p-hold); }
+.ev.catch { transform: scale(.4); opacity: 0; }
+.ev.catch.hit { transform: none; opacity: 1; }
+.scale { position: relative; height: 18px; margin-top: 8px; font: 12px var(--mono); color: var(--p-muted); }
+.scale span { position: absolute; top: 0; transform: translateX(-50%); }
+.scale span:first-child { transform: none; }
+.log { margin: 20px 0 0; padding: 0; list-style: none; font: 13.5px/1.5 var(--mono); }
+.log li { display: grid; grid-template-columns: 86px 14px minmax(0, 1fr); align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid rgba(255, 255, 255, .08); color: var(--p-muted); transition: color 200ms; }
+.log time { font-variant-numeric: tabular-nums; }
+.log i { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, .25); transition: background-color 200ms; }
+.log span { font-family: var(--font); font-size: 14px; }
+.log li.hit { color: var(--p-ink); }
+.log li.hit i { background: var(--signal); }
+.log li.miss.hit i { background: var(--p-hold); }
+.track .phealth { white-space: normal; margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(255, 255, 255, .08); font-size: 13px; }
+
+/* ---------- options: the popup's real controls, working ---------- */
+.opts { overflow: hidden; }
+.opts .blk { padding: 16px 18px 14px; }
+.opts .blk-head { font-size: 13px; }
+.opts .seg button { position: relative; z-index: 1; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; font-weight: 500; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; cursor: pointer; transition: color 200ms var(--out), transform 120ms var(--out); }
+.opts .seg button:hover { color: var(--ink); }
+.opts .seg button:active { transform: scale(.96); }
+.opts .seg button[aria-checked="true"] { color: var(--ink); font-weight: 600; }
+html:not(.js) .opts .seg button[aria-checked="true"] { background: var(--thumb); box-shadow: var(--thumb-shadow); }
+.seg > .thumb { position: absolute; z-index: 0; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 8px; background: var(--thumb); box-shadow: var(--thumb-shadow); transition: transform 500ms var(--spring), width 500ms var(--spring); }
+html:not(.js) .thumb { display: none; }
+.every { display: inline-block; min-width: 4em; text-align: right; font-variant-numeric: tabular-nums; }
+.every.swap { animation: swap 360ms var(--out); }
+@keyframes swap { from { opacity: 0; transform: translateY(6px); filter: blur(3px); } }
+.opts .row { padding: 16px 18px; cursor: pointer; }
+.opts .more { cursor: default; color: var(--muted); }
+.opts .row::before { left: 18px !important; }
+.opts .row-title { font-size: 15px; }
+.opts .row-sub { font-size: 13px; }
+kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 7px; margin: 0 1px; border-radius: 7px; background: var(--surface); box-shadow: inset 0 -1px 0 var(--line-strong), 0 0 0 1px var(--line); font: 500 13px var(--font); color: var(--ink); vertical-align: 1px; }
+
+/* ---------- privacy ---------- */
+.dt { overflow: hidden; border-radius: 16px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); font-size: 12.5px; }
+.dt-tabs { display: flex; align-items: center; gap: 18px; height: 38px; padding: 0 16px; background: var(--surface-2); color: var(--muted); }
+.dt-tabs .on { height: 100%; display: flex; align-items: center; color: var(--ink); font-weight: 600; box-shadow: inset 0 -2px 0 var(--focus); }
+.dt-tabs .who { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.dt-tabs .who svg { width: 14px; height: 14px; }
+.dt-head { display: grid; grid-template-columns: 2.4fr 1fr 1fr 1fr; padding: 8px 16px; border-bottom: 1px solid var(--line); color: var(--muted); font-weight: 500; }
+.dt-body { display: grid; place-items: center; align-content: center; gap: 6px; height: 300px; text-align: center; }
+.dt-body strong { font: 200 168px/.9 var(--display); letter-spacing: -.05em; font-variant-numeric: tabular-nums; color: var(--ink); }
+.dt-body span { font-size: 16px; color: var(--muted); }
+.dt-foot { display: flex; gap: 14px; padding: 8px 16px; border-top: 1px solid var(--line); background: var(--surface-2); color: var(--muted); font-variant-numeric: tabular-nums; }
+.no { margin: 8px 0 28px; padding: 0; list-style: none; max-width: 30em; }
+.no li { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+.no li:last-child { border-bottom: 1px solid var(--line); }
+.no b { font-weight: 600; }
+.no span { color: var(--ink-2); }
+.closing { height: 100svh; padding: var(--padt) 0 var(--padb); background: var(--bg); }
+.closing > .wrap { height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+.legal { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 24px 0 0; font-size: 15px; color: var(--muted); }
+
+/* ---------- tablet and phone ---------- */
+@media (max-width: 1023px) {
+  :root { --padt: 104px; --padb: 48px; --gut: 32px; }
+  .hero-text { grid-template-rows: auto minmax(0, 1fr); align-items: stretch; row-gap: 32px; }
+  .hero .stage { height: auto; min-height: 0; }
+  h1 { font-size: 46px; }
+  h2 { font-size: 38px; }
+  .split { grid-template-columns: minmax(0, 1fr); row-gap: 28px; }
+  .split > :first-child, .split > :last-child { grid-column: 1 / -1; padding-right: 0; }
+  #watch > .wrap { grid-template-rows: auto minmax(0, 1fr); row-gap: 20px; }
+  .steps { display: grid; grid-template-areas: "s"; margin-top: 0; }
+  .js:not(.still) .step { grid-area: s; border: 0; padding: 0; opacity: 0; visibility: hidden; transition: opacity 250ms, visibility 0s 250ms; }
+  .js:not(.still) .step.on { opacity: 1; visibility: visible; transition: opacity 250ms; }
+  .js:not(.still) .step::after { display: none; }
+  html:not(.js) .step, .still .step { padding: 8px 0; }
+  .scene-stage { max-height: none; min-height: 0; }
+  .copy p { font-size: 17px; }
+  .dt-body { height: 220px; }
+  .dt-body strong { font-size: 128px; }
+}
+@media (max-width: 639px) {
+  :root { --padt: 96px; --padb: 40px; --gut: 20px; }
+  main > section:not(.hero) { height: calc(var(--hm, var(--h, 1)) * 100lvh); }
+  #watch { --hm: 2; }
+  .closing { height: 100lvh; }
+  .hero { height: 100lvh; padding-bottom: 24px; }
+  .hero-text { row-gap: 28px; }
+  .hero .tabs, .hero .toolbar, .path { display: none; }
+  .hero .site-body { padding-top: 220px; }
+  .hero .site-body > :not(.lines) { display: none; }
+  .hero .lines { display: grid; }
+  .hero .pop { top: 8px; }
+  h1 { font-size: 34px; letter-spacing: -.035em; }
+  h2 { font-size: 29px; margin-bottom: 14px; }
+  .lede { font-size: 17px; margin: 16px 0 20px; }
+  .facts { margin-top: 14px; font-size: 14px; }
+  .nav-links { gap: 18px; }
+  .site-bar span, .lights, .toolbar > svg:nth-of-type(2) { display: none; }
+  .site-body { max-width: none; padding: 16px; }
+  .lines { display: none; }
+  .pop { left: 8px; right: 8px; width: auto; }
+  .hero .pop .blk, .hero .pop .card { display: none; }
+  .scene-stage .pop { top: 250px; }
+  .opts .more { display: none; }
+  .toast { left: 10px; right: 10px; width: auto; }
+  .scene-stage .toast { top: 86px; bottom: auto; left: 10px; right: 10px; transform-origin: top center; }
+  .step b { font-size: 17px; }
+  .step p { font-size: 15px; }
+  .step { grid-template-columns: 32px minmax(0, 1fr); }
+  .copy .wide { display: none; }
+  .log { display: none; }
+  .track { padding: 16px 16px 18px; }
+  .track .clock { font-size: 44px; height: 50px; }
+  .no { display: none; }
+  .dt-head { grid-template-columns: 2fr 1fr 1fr; }
+  .dt-head span:last-child { display: none; }
+  .dt-tabs .who span { display: none; }
+  .dt-body { height: 170px; }
+  .dt-body strong { font-size: 104px; }
+  .opts .row { padding: 12px 16px; }
+  .opts .row-title { font-size: 14px; }
+  .opts .row-sub { font-size: 12px; }
+  .opts .blk { padding: 14px 14px 12px; }
+}
+@media (min-width: 1024px) and (max-height: 820px) {
+  .no { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition-duration: 1ms !important; }
+}
+</style>
+</head>
+<body>
+<!-- kind: software · one rich element a screen: the dark instrument panel · scene: #watch (pinned, scroll-scrubbed) · moment: #keeps-going (scroll-scrubbed) -->
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="Steady Refresh home">
+      <svg class="mark" viewBox="0 0 128 128" aria-hidden="true"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="var(--brand)" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="var(--brand)" stroke="var(--brand)" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="var(--brand)"/></svg>
+      Steady Refresh
+    </a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="#watch">Alerts</a>
+      <a href="../privacy.html">Privacy</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <!-- 1. Hero: the popup hangs from the toolbar icon and keeps time -->
+  <section class="hero" id="top">
+    <div class="wrap"><div class="hero-text split">
+      <div class="hero-copy">
+        <h1>Chrome auto refresh that checks every reload happened</h1>
+        <p class="lede">Steady Refresh reloads a tab on the schedule you set and tells you the moment the text you're waiting for appears. No account, no tracking, and nothing leaves your browser.</p>
+        <div class="cta-row">
+          <span class="status-pill"><i aria-hidden="true"></i>In review at the Chrome Web Store</span>
+          <a class="btn" href="#watch">See how it works<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M3 7.5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+        </div>
+        <p class="facts">1 second to 24 hours<span aria-hidden="true"> · </span>Alerts on text<span aria-hidden="true"> · </span>No network requests</p>
+      </div>
+
+      <div class="stage" id="heroStage" data-ui data-ui-pause-host role="img" aria-label="Steady Refresh open over a permit application page, reloading it every 10 seconds with a countdown on the toolbar icon">
+        <div class="win" aria-hidden="true">
+          <div class="tabs"><span class="lights"><i></i><i></i><i></i></span><span class="tab"><i class="fav"></i>Northwind Permits</span></div>
+          <div class="toolbar">
+            <svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="url"><b>permits.northwind.example</b><span class="path">/applications/NP-2026-04817</span></span>
+            <span class="ext"><svg viewBox="0 0 128 128"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="#5DBB2E" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="#5DBB2E" stroke="#5DBB2E" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="#5DBB2E"/></svg><b class="bdg" id="hBadge">7s</b></span>
+          </div>
+          <div class="site-body" id="hPage">
+            <p class="site-brand">Northwind Permits</p>
+            <div class="ptitle">Building permit</div>
+            <div class="ref">NP-2026-04817 · Submitted 3 November</div>
+            <div class="prow"><span>Status</span><span class="badge">In review</span></div>
+            <div class="prow"><span>Officer</span><span>J. Alvarez</span></div>
+            <div class="prow"><span>Updated</span><span>17 November, 10:37</span></div>
+            <div class="lines"><i></i><i></i><i></i><i class="gap"></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="pop">
+            <div class="ip" id="hPanel" data-state="running">
+              <div class="ptop"><span><svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.8 8h12.4M8 1.7c2 2.3 2 10.3 0 12.6M8 1.7c-2 2.3-2 10.3 0 12.6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>permits.northwind.example</span><svg viewBox="0 0 20 20" width="18" height="18"><path d="M3.5 6h8M15.5 6h1M3.5 14h1M8.5 14h8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="13.5" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="6.5" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></div>
+              <div class="pstatus"><span class="pdot"></span><span id="hStatus">Refreshing every 10 s</span></div>
+              <div class="clock" id="hClock">0:07</div>
+              <div class="ticks"><span id="hBar" style="--p:.3"></span></div>
+              <div class="phealth"><span id="hHealth">Last refresh 3 s ago · 36 refreshes</span><b>Refresh now</b></div>
+            </div>
+            <div class="blk">
+              <div class="blk-head">Refresh every<span>10 s</span></div>
+              <div class="seg"><span class="on">10s</span><span>30s</span><span>1m</span><span>5m</span><span>15m</span><span>1h</span><span>Custom</span></div>
+            </div>
+            <div class="card">
+              <div class="row"><span class="row-text"><span class="row-title">Pause while I'm using the page</span><span class="row-sub">Waits 15 seconds after you type, click or scroll</span></span><span class="sw static"><input type="checkbox" checked disabled tabindex="-1"><span></span></span></div>
+              <div class="row"><span class="row-text"><span class="row-title">Keep my scroll position</span><span class="row-sub">Returns to the same spot after each refresh</span></span><span class="sw static"><input type="checkbox" checked disabled tabindex="-1"><span></span></span></div>
+            </div>
+          </div>
+        </div>
+        <button class="pause" id="hPause" type="button" aria-pressed="false" aria-label="Pause the demo"><svg viewBox="0 0 14 14" aria-hidden="true"><path id="hPauseIcon" d="M3.5 2v10M10.5 2v10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg></button>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- 2. Scene: pinned for two screens; the scroll types the word, runs the countdown, reloads, and the alert fires -->
+  <section id="watch" data-big-scene data-big-scene-opts='{"hold": 1}'>
+    <div class="wrap split">
+        <div>
+          <h2>Text alerts for the word you're waiting for</h2>
+          <ol class="steps">
+            <li class="step" data-i="0"><em>01</em><div><b>Type the text to watch for</b><p>Alert when it appears, when it disappears, or when anything on the page changes.</p></div></li>
+            <li class="step" data-i="1"><em>02</em><div><b>It reloads on your schedule</b><p>A countdown on the toolbar icon shows the time left.</p></div></li>
+            <li class="step on" data-i="2"><em>03</em><div><b>"Approved" shows up</b><p>A notification and a chime, the text highlighted where it appears, and it stops so you can take a look.</p></div></li>
+          </ol>
+        </div>
+        <div class="stage scene-stage" data-ui role="img" aria-label="Steady Refresh watching a permit application for the word Approved. After a reload the status changes to Approved and a notification appears.">
+          <div class="win" aria-hidden="true">
+            <div class="tabs"><span class="lights"><i></i><i></i><i></i></span><span class="tab"><i class="fav"></i>Northwind Permits</span></div>
+            <div class="toolbar">
+              <svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="url"><b>permits.northwind.example</b><span class="path">/applications/NP-2026-04817</span></span>
+              <span class="ext"><svg viewBox="0 0 128 128"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="#5DBB2E" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="#5DBB2E" stroke="#5DBB2E" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="#5DBB2E"/></svg><b class="bdg alert" id="wBadge">!</b></span>
+            </div>
+            <div class="site-bar"><b>Northwind Permits</b><span>Applications</span><span>Inspections</span></div>
+            <div class="site-body" id="wPage">
+              <div class="ptitle">Building permit</div>
+              <div class="ref">NP-2026-04817 · Submitted 3 November</div>
+              <div class="prow"><span>Status</span><span class="badge ok" id="wStatusBadge">Approved</span></div>
+              <div class="prow"><span>Officer</span><span>J. Alvarez</span></div>
+              <div class="prow"><span>Updated</span><span id="wUpdated">17 November, 10:42</span></div>
+              <div class="lines"><i></i><i></i><i></i><i class="gap"></i><i></i><i></i><i></i><i></i></div>
+            </div>
+            <div class="pop">
+              <div class="ip" id="wPanel" data-state="alert">
+                <div class="ptop"><span><svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.8 8h12.4M8 1.7c2 2.3 2 10.3 0 12.6M8 1.7c-2 2.3-2 10.3 0 12.6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>permits.northwind.example</span><svg viewBox="0 0 20 20" width="18" height="18"><path d="M3.5 6h8M15.5 6h1M3.5 14h1M8.5 14h8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="13.5" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="6.5" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></div>
+                <div class="pstatus"><span class="pdot"></span><span id="wStatus">"Approved" appeared</span></div>
+                <div class="clock" id="wClock">0:30</div>
+                <div class="ticks"><span id="wBar" style="--p:1"></span></div>
+                <div class="phealth"><span id="wHealth">Stopped so you can take a look</span><b>Refresh now</b></div>
+              </div>
+              <div class="card">
+                <div class="row"><span class="row-text"><span class="row-title">Alert me</span><span class="row-sub">Notification when the page matches. Checked on this device only.</span></span><span class="sw static"><input type="checkbox" checked disabled tabindex="-1"><span></span></span></div>
+                <div class="alertbox">
+                  <div class="seg three"><span class="on">Text appears</span><span>Text disappears</span><span>Page changes</span></div>
+                  <div class="field" id="wField"><span id="wWord">Approved</span><i class="caret"></i></div>
+                  <div class="checks"><span><i class="on"></i>Play a chime</span><span><i></i>Keep refreshing</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="toast show" id="wToast">
+              <svg viewBox="0 0 128 128"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="#5DBB2E" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="#5DBB2E" stroke="#5DBB2E" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="#5DBB2E"/></svg>
+              <div><b>Approved</b><span>Appeared on permits.northwind.example</span></div>
+            </div>
+          </div>
+        </div>
+    </div>
+  </section>
+
+  <!-- 3. Keeps going: the scroll sweeps a morning past the 30-second check -->
+  <section id="keeps-going" data-scroll-moment>
+    <div class="wrap split">
+      <div class="copy">
+        <h2>A 30-second check catches missed reloads</h2>
+        <p>Chrome puts idle extensions to sleep, and a lot of auto-refreshers lose their timer when that happens. The countdown keeps showing, but the page never reloads.</p>
+        <p>Steady Refresh keeps its schedule in Chrome's storage and checks every 30 seconds that each tab is on time. A missed turn gets made up, and a page that hangs while loading is tried again.</p>
+      </div>
+      <div class="track" data-ui role="img" aria-label="Example: a tab set to reload every 5 minutes. The 09:10 reload is missed while Chrome is asleep and caught up by the 30-second check at 09:10:30.">
+        <div aria-hidden="true">
+          <div class="track-head"><svg class="mark" viewBox="0 0 128 128"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="#5DBB2E" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="#5DBB2E" stroke="#5DBB2E" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="#5DBB2E"/></svg>Example: a tab set to reload every 5 minutes</div>
+          <div class="clock" id="kClock">9:15:00</div>
+          <div class="pstatus" id="kRow" data-state="running"><span class="pdot"></span><span id="kStatus">Reloaded, back on schedule</span></div>
+          <div class="ruler">
+            <i class="ev hit" style="left:0%"></i><i class="ev hit" style="left:31.25%"></i><i class="ev miss hit" style="left:62.5%"></i><i class="ev catch hit" style="left:65.625%"></i><i class="ev hit" style="left:93.75%"></i>
+            <div class="ticks"><span id="kBar" style="--p:1"></span></div>
+            <div class="scale"><span style="left:0">9:00</span><span style="left:31.25%">9:05</span><span style="left:62.5%">9:10</span><span style="left:93.75%">9:15</span></div>
+          </div>
+          <ol class="log">
+            <li class="hit"><time>09:00:00</time><i></i><span>Reloaded</span></li>
+            <li class="hit"><time>09:05:00</time><i></i><span>Reloaded</span></li>
+            <li class="hit miss"><time>09:10:00</time><i></i><span>Missed while Chrome was asleep</span></li>
+            <li class="hit"><time>09:10:30</time><i></i><span>Caught up by the 30-second check</span></li>
+            <li class="hit"><time>09:15:00</time><i></i><span>Reloaded, back on schedule</span></li>
+          </ol>
+          <div class="phealth"><span><b id="kCount" style="font-weight:500;text-decoration:none;color:var(--p-ink)">Last refresh 1 min ago</b> · 37 refreshes</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. Options: the popup's own controls, live -->
+  <section id="options">
+    <div class="wrap split">
+      <div class="copy">
+        <h2>Pause, scroll and hours, one switch each</h2>
+        <p>It waits while you're typing, keeps your place on the page, and only runs when you want it to. Pick 1 second to 24 hours, or type your own.</p>
+        <p class="wide">Start or stop from the keyboard with <kbd>Alt</kbd><kbd>Shift</kbd><kbd>R</kbd>, or <kbd>Option</kbd><kbd>Shift</kbd><kbd>R</kbd> on a Mac.</p>
+      </div>
+      <div class="card opts" data-ui>
+        <div class="blk">
+          <div class="blk-head"><span style="color:var(--ink-2);font-weight:600" id="everyLabel">Refresh every</span><span class="every" id="every">5 min</span></div>
+          <div class="seg" id="presets" role="radiogroup" aria-labelledby="everyLabel">
+            <span class="thumb" aria-hidden="true"></span>
+            <button type="button" role="radio" aria-checked="false" tabindex="-1" data-h="10 s">10s</button>
+            <button type="button" role="radio" aria-checked="false" tabindex="-1" data-h="30 s">30s</button>
+            <button type="button" role="radio" aria-checked="false" tabindex="-1" data-h="1 min">1m</button>
+            <button type="button" role="radio" aria-checked="true" tabindex="0" data-h="5 min">5m</button>
+            <button type="button" role="radio" aria-checked="false" tabindex="-1" data-h="15 min">15m</button>
+            <button type="button" role="radio" aria-checked="false" tabindex="-1" data-h="1 h">1h</button>
+            <button type="button" role="radio" aria-checked="false" tabindex="-1" data-h="Up to 24 h">Custom</button>
+          </div>
+        </div>
+        <label class="row"><span class="row-text"><span class="row-title">Pause while I'm using the page</span><span class="row-sub">Carries on 15 seconds after you stop typing, clicking or scrolling</span></span><span class="sw"><input type="checkbox" checked><span></span></span></label>
+        <label class="row"><span class="row-text"><span class="row-title">Keep my scroll position</span><span class="row-sub">Returns to the same spot after each reload</span></span><span class="sw"><input type="checkbox" checked><span></span></span></label>
+        <label class="row"><span class="row-text"><span class="row-title">Alert me</span><span class="row-sub">When text appears, disappears, or anything on the page changes</span></span><span class="sw"><input type="checkbox" checked><span></span></span></label>
+        <label class="row"><span class="row-text"><span class="row-title">Only during set hours</span><span class="row-sub">With a weekdays-only option</span></span><span class="sw"><input type="checkbox"><span></span></span></label>
+        <label class="row"><span class="row-text"><span class="row-title">Start automatically on this page</span><span class="row-sub">Picks up again the next time the address opens</span></span><span class="sw"><input type="checkbox"><span></span></span></label>
+        <div class="row more"><span class="row-text"><span class="row-title">More options</span><span class="row-sub">Random variation, a reload limit, skip the cache</span></span><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 4.5 6 7.5l3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- 5. Privacy, then the legal row: the close and the footer are one screen -->
+<footer class="closing" id="privacy">
+  <div class="wrap">
+    <div class="split">
+      <div class="copy">
+        <h2>No account and no network requests</h2>
+        <p>The text on your pages is checked on your own computer. Site access is asked for one site at a time, and only for the features that need it.</p>
+        <ul class="no">
+          <li><b>No account</b><span>Install it and press Start.</span></li>
+          <li><b>No analytics or ads</b><span>Nothing measures how you use it.</span></li>
+          <li><b>No page text stored</b><span>Text is read in memory to check your alert, then let go.</span></li>
+        </ul>
+        <a class="btn" href="../privacy.html">Read the privacy policy</a>
+      </div>
+      <div class="dt" data-ui role="img" aria-label="Chrome's network panel for the Steady Refresh service worker, showing 0 requests">
+        <div aria-hidden="true">
+          <div class="dt-tabs"><span>Console</span><span>Sources</span><span class="on">Network</span><span class="who"><svg class="mark" viewBox="0 0 128 128"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="#5DBB2E" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="#5DBB2E" stroke="#5DBB2E" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="#5DBB2E"/></svg><span>Service worker</span></span></div>
+          <div class="dt-head"><span>Name</span><span>Status</span><span>Type</span><span>Size</span></div>
+          <div class="dt-body"><strong>0</strong><span>requests</span></div>
+          <div class="dt-foot"><span>0 requests</span><span>0 B transferred</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="legal"><span>Steady Refresh for Chrome</span><a href="../privacy.html">Privacy policy</a></div>
+  </div>
+</footer>
+
+<script src="vendor/gsap.min.js"></script>
+<script src="vendor/ScrollTrigger.min.js"></script>
+<script src="vendor/lenis.min.js"></script>
+<script>
+(() => {
+  const root = document.documentElement;
+  const $ = (id) => document.getElementById(id);
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  root.classList.add('js');
+  if (still) root.classList.add('still');
+  const clamp = (v) => Math.min(1, Math.max(0, v));
+  const span = (p, a, b) => clamp((p - a) / (b - a));
+
+  // Rolling digits: a changed character leaves one way and its successor arrives from the other.
+  function roll(el, text, up) {
+    const prev = el.dataset.v;
+    if (prev === text) return;
+    el.dataset.v = text;
+    el.classList.toggle('up', !!up);
+    if (prev === undefined || prev.length !== text.length || still) {
+      el.replaceChildren(...[...text].map((ch) => {
+        const c = document.createElement('span'); c.className = ch === ':' ? 'cell sep' : 'cell';
+        const g = document.createElement('span'); g.className = 'g'; g.textContent = ch; c.append(g); return c;
+      }));
+      return;
+    }
+    [...text].forEach((ch, i) => {
+      const cell = el.children[i], cur = cell.querySelector('.g:not(.out)');
+      if (!cur || cur.textContent === ch) return;
+      cell.querySelectorAll('.out').forEach((n) => n.remove());
+      cur.className = 'g out';
+      cur.addEventListener('animationend', () => cur.remove(), { once: true });
+      const g = document.createElement('span'); g.className = 'g in'; g.textContent = ch; cell.append(g);
+    });
+  }
+  const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+  /* ---------- hero: a steady loop, 10 s at a time, with a pause button ---------- */
+  {
+    const panel = $('hPanel'), clock = $('hClock'), bar = $('hBar'), status = $('hStatus'), health = $('hHealth'), badge = $('hBadge'), page = $('hPage');
+    const I = 10;
+    let t = 7, count = 36, timer = 0, paused = still;
+    roll(clock, mmss(t));
+    const healthText = () => `Last refresh ${I - t} s ago · ${count} refreshes`;
+    function show() { roll(clock, mmss(t)); bar.style.setProperty('--p', (I - t) / I); badge.textContent = `${t}s`; health.textContent = healthText(); }
+    function tick() {
+      t--;
+      if (t > 0) { show(); return (timer = setTimeout(tick, 1000)); }
+      show();
+      panel.dataset.state = 'held'; status.textContent = 'Refreshing…'; badge.textContent = '…'; badge.className = 'bdg held'; page.classList.add('reloading');
+      timer = setTimeout(() => {
+        count++; t = I; page.classList.remove('reloading');
+        panel.dataset.state = 'running'; status.textContent = `Refreshing every ${I} s`; badge.className = 'bdg';
+        roll(clock, mmss(t), true); bar.style.setProperty('--p', 0); badge.textContent = `${t}s`;
+        health.textContent = `Last refresh just now · ${count} refreshes`;
+        timer = setTimeout(tick, 1000);
+      }, 800);
+    }
+    const btn = $('hPause'), icon = $('hPauseIcon');
+    btn.addEventListener('click', () => {
+      paused = !paused;
+      btn.setAttribute('aria-pressed', String(paused));
+      btn.setAttribute('aria-label', paused ? 'Play the demo' : 'Pause the demo');
+      icon.setAttribute('d', paused ? 'M4 2.2v9.6L12 7z' : 'M3.5 2v10M10.5 2v10');
+      clearTimeout(timer);
+      if (!paused) timer = setTimeout(tick, 400);
+    });
+    if (!still) timer = setTimeout(tick, 1200);
+  }
+
+  /* ---------- scene: one pure function of scroll progress, so scrubbing back works ---------- */
+  const scene = (() => {
+    const steps = [...document.querySelectorAll('#watch .step')];
+    const panel = $('wPanel'), clock = $('wClock'), bar = $('wBar'), status = $('wStatus'), health = $('wHealth');
+    const badge = $('wBadge'), page = $('wPage'), word = $('wWord'), field = $('wField'), toast = $('wToast'), sb = $('wStatusBadge'), upd = $('wUpdated');
+    const W = 'Approved';
+    let last = -1;
+    return (p) => {
+      const up = p < last; last = p;
+      const idx = p < .3 ? 0 : p < .62 ? 1 : 2;
+      steps.forEach((s, i) => { s.classList.toggle('on', i === idx); s.style.setProperty('--s', i === idx ? (i === 0 ? span(p, 0, .3) : i === 1 ? span(p, .3, .62) : span(p, .62, .9)) : 0); });
+      const typed = Math.round(span(p, .04, .22) * W.length);
+      word.textContent = W.slice(0, typed);
+      field.classList.toggle('typing', typed < W.length && p > .02);
+      const t = 30 - Math.round(span(p, .32, .52) * 30);
+      const held = p >= .53 && p < .6, alert = p >= .6;
+      page.classList.toggle('reloading', held);
+      sb.textContent = alert ? 'Approved' : 'In review'; sb.classList.toggle('ok', alert);
+      upd.textContent = alert ? '17 November, 10:42' : '17 November, 10:37';
+      toast.classList.toggle('show', alert && p >= .63);
+      const count = alert ? 38 : 37;
+      if (alert) {
+        panel.dataset.state = 'alert'; status.textContent = '"Approved" appeared';
+        roll(clock, '0:30', up); bar.style.setProperty('--p', 1); health.textContent = 'Stopped so you can take a look';
+        badge.textContent = '!'; badge.className = 'bdg alert';
+      } else if (held) {
+        panel.dataset.state = 'held'; status.textContent = 'Refreshing…';
+        roll(clock, '0:00', up); bar.style.setProperty('--p', 1); health.textContent = `Last refresh 30 s ago · ${count} refreshes`;
+        badge.textContent = '…'; badge.className = 'bdg held';
+      } else {
+        panel.dataset.state = 'running'; status.textContent = 'Refreshing every 30 s';
+        roll(clock, mmss(t), up); bar.style.setProperty('--p', (30 - t) / 30); health.textContent = `Last refresh ${30 - t} s ago · ${count} refreshes`;
+        badge.textContent = `${t}s`; badge.className = 'bdg';
+      }
+    };
+  })();
+
+  /* ---------- the 30-second check: the scroll sweeps 09:00 to 09:15:30 ---------- */
+  const track = (() => {
+    const clock = $('kClock'), bar = $('kBar'), status = $('kStatus'), row = $('kRow'), count = $('kCount');
+    const evs = [...document.querySelectorAll('#keeps-going .ev')], logs = [...document.querySelectorAll('#keeps-going .log li')];
+    const at = [0, 5, 10, 10.5, 15];
+    const words = ['Reloaded', 'Reloaded', 'Missed while Chrome was asleep', 'Caught up by the 30-second check', 'Reloaded, back on schedule'];
+    let last = -1;
+    return (p) => {
+      const up = p < last; last = p;
+      const m = Math.floor(p * 31) / 2; // 30-second steps across 15.5 minutes
+      const s = Math.round(m * 60);
+      roll(clock, `9:${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`, up);
+      bar.style.setProperty('--p', (m / 16).toFixed(4));
+      let k = -1;
+      at.forEach((a, i) => { const hit = m >= a; evs[i].classList.toggle('hit', hit); logs[i].classList.toggle('hit', hit); if (hit) k = i; });
+      status.textContent = words[Math.max(0, k)];
+      row.dataset.state = k === 2 ? 'held' : 'running';
+      const n = [0, 1, 2, 2, 3, 4][k + 1]; // the missed 09:10 turn adds nothing
+      count.textContent = n === 0 ? 'Last refresh 5 min ago' : m - at[k] < 1 ? 'Last refresh just now' : `Last refresh ${Math.floor(m - at[k])} min ago`;
+      count.nextSibling.textContent = ` · ${33 + n} refreshes`;
+    };
+  })();
+
+  /* ---------- options: the real segmented control and switches ---------- */
+  {
+    const group = $('presets'), thumb = group.querySelector('.thumb'), every = $('every');
+    const btns = [...group.querySelectorAll('button')];
+    const place = () => { const on = btns.find((b) => b.getAttribute('aria-checked') === 'true'); thumb.style.width = `${on.offsetWidth}px`; thumb.style.transform = `translateX(${on.offsetLeft}px)`; };
+    function pick(b, focus) {
+      btns.forEach((x) => { const on = x === b; x.setAttribute('aria-checked', String(on)); x.tabIndex = on ? 0 : -1; });
+      if (focus) b.focus();
+      place();
+      every.textContent = b.dataset.h; every.classList.remove('swap'); void every.offsetWidth; every.classList.add('swap');
+    }
+    btns.forEach((b, i) => {
+      b.addEventListener('click', () => pick(b));
+      b.addEventListener('keydown', (e) => {
+        const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+        if (d) { e.preventDefault(); pick(btns[(i + d + btns.length) % btns.length], true); }
+      });
+    });
+    thumb.style.transition = 'none'; place(); thumb.offsetWidth; thumb.style.transition = '';
+    new ResizeObserver(place).observe(group); // the card's width changes without a window resize (a scrollbar appearing)
+  }
+
+  /* ---------- scroll: Lenis for the feel, ScrollTrigger to scrub the two scenes ---------- */
+  if (still || !window.gsap || !window.ScrollTrigger) { scene(1); track(1); return; }
+  gsap.registerPlugin(ScrollTrigger);
+  if (window.Lenis) {
+    const lenis = new Lenis({ autoRaf: false, anchors: true, lerp: 0.12 });
+    window.lenis = lenis;
+    lenis.on('scroll', ScrollTrigger.update);
+    gsap.ticker.add((time) => lenis.raf(time * 1000));
+    gsap.ticker.lagSmoothing(0);
+  }
+  scene(0); track(0);
+  ScrollTrigger.create({ trigger: '#watch', start: 'top top', end: 'bottom bottom', onUpdate: (st) => scene(st.progress), onRefresh: (st) => scene(st.progress) });
+  // Finished before the section's top reaches a fifth of the screen, so a stopped page never shows it half done.
+  ScrollTrigger.create({ trigger: '#keeps-going', start: 'top 85%', end: 'top 20%', onUpdate: (st) => track(st.progress), onRefresh: (st) => track(st.progress) });
+})();
+</script>
+</body>
+</html>
