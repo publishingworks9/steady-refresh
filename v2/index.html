@@ -360,6 +360,19 @@ kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; 
   .opts .row-title { font-size: 14px; }
   .opts .row-sub { font-size: 12px; }
   .opts .blk { padding: 14px 14px 12px; }
+  /* Phones: content decides the height, so nothing spills into the next section. */
+  main > section:not(.hero):not(#watch) { height: auto; min-height: calc(var(--hm, var(--h, 1)) * 100lvh); }
+  .closing { height: auto; min-height: 100lvh; }
+  .hero { height: auto; min-height: 100lvh; }
+  .hero-text { grid-template-rows: auto auto; }
+  .hero .stage { height: 292px; }
+  /* Pinned scene: keep the countdown, the typed word and the alert; drop page details. */
+  #watch > .wrap { padding-top: 76px; padding-bottom: 20px; }
+  #watch .tabs, #watch .site-bar, #watch .site-body .ref, #watch .site-body .prow ~ .prow, #watch .lines { display: none; }
+  #watch .site-body { padding: 12px 16px; }
+  .scene-stage .pop { top: 100px; }
+  #watch .pop .card > .row, #watch .pop .seg, #watch .pop .checks { display: none; }
+  .scene-stage .toast, .hero .toast { top: auto; bottom: 6px; transform-origin: bottom center; }
 }
 @media (min-width: 1024px) and (max-height: 820px) {
   .no { display: none; }
@@ -411,10 +424,14 @@ kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; 
             <p class="site-brand">Northwind Permits</p>
             <div class="ptitle">Building permit</div>
             <div class="ref">NP-2026-04817 · Submitted 3 November</div>
-            <div class="prow"><span>Status</span><span class="badge">In review</span></div>
+            <div class="prow"><span>Status</span><span class="badge" id="hStatusBadge">In review</span></div>
             <div class="prow"><span>Officer</span><span>J. Alvarez</span></div>
-            <div class="prow"><span>Updated</span><span>17 November, 10:37</span></div>
+            <div class="prow"><span>Updated</span><span id="hUpdated">17 November, 10:37</span></div>
             <div class="lines"><i></i><i></i><i></i><i class="gap"></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="toast" id="hToast" aria-hidden="true">
+            <svg viewBox="0 0 128 128"><path d="M 97.98 68.9 A 33.98 33.98 0 1 1 64 34.91" fill="none" stroke="#5DBB2E" stroke-width="16.32" stroke-linecap="round"/><path d="M 80.32 34.91 L 59.92 50.42 L 59.92 19.41 Z" fill="#5DBB2E" stroke="#5DBB2E" stroke-width="4.9" stroke-linejoin="round"/><circle cx="64" cy="68.9" r="9.6" fill="#5DBB2E"/></svg>
+            <div><b>Approved</b><span>Appeared on permits.northwind.example</span></div>
           </div>
           <div class="pop">
             <div class="ip" id="hPanel" data-state="running">
@@ -626,20 +643,42 @@ kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; 
   /* ---------- hero: a steady loop, 10 s at a time, with a pause button ---------- */
   {
     const panel = $('hPanel'), clock = $('hClock'), bar = $('hBar'), status = $('hStatus'), health = $('hHealth'), badge = $('hBadge'), page = $('hPage');
+    const sb = $('hStatusBadge'), upd = $('hUpdated'), toast = $('hToast');
     const I = 10;
-    let t = 7, count = 36, timer = 0, paused = still;
+    let t = 7, count = 36, round = 0, since = 0, timer = 0, paused = still;
     roll(clock, mmss(t));
     const healthText = () => `Last refresh ${I - t} s ago · ${count} refreshes`;
     function show() { roll(clock, mmss(t)); bar.style.setProperty('--p', (I - t) / I); badge.textContent = `${t}s`; health.textContent = healthText(); }
+    function running() {
+      panel.dataset.state = 'running'; status.textContent = `Refreshing every ${I} s`; badge.className = 'bdg';
+      roll(clock, mmss(t), true); bar.style.setProperty('--p', 0); badge.textContent = `${t}s`;
+    }
+    // The alert holds, counting up like the real popup, then the demo starts over.
+    function alerted() {
+      toast.classList.add('show');
+      since++; roll(clock, mmss(since), true);
+      if (since < 5) return (timer = setTimeout(alerted, 1000));
+      toast.classList.remove('show'); sb.textContent = 'In review'; sb.classList.remove('ok'); upd.textContent = '17 November, 10:37';
+      t = I; count = 36; round = 0; running(); health.textContent = healthText();
+      timer = setTimeout(tick, 1400);
+    }
     function tick() {
       t--;
       if (t > 0) { show(); return (timer = setTimeout(tick, 1000)); }
       show();
       panel.dataset.state = 'held'; status.textContent = 'Refreshing…'; badge.textContent = '…'; badge.className = 'bdg held'; page.classList.add('reloading');
       timer = setTimeout(() => {
-        count++; t = I; page.classList.remove('reloading');
-        panel.dataset.state = 'running'; status.textContent = `Refreshing every ${I} s`; badge.className = 'bdg';
-        roll(clock, mmss(t), true); bar.style.setProperty('--p', 0); badge.textContent = `${t}s`;
+        count++; round++; t = I; page.classList.remove('reloading');
+        if (round === 2) {
+          sb.textContent = 'Approved'; sb.classList.add('ok'); upd.textContent = '17 November, 10:42';
+          panel.dataset.state = 'alert'; status.textContent = '"Approved" appeared';
+          health.textContent = 'Stopped so you can take a look'; bar.style.setProperty('--p', 1);
+          badge.textContent = '!'; badge.className = 'bdg alert';
+          since = 0; roll(clock, mmss(0), true);
+          timer = setTimeout(() => { toast.classList.add('show'); timer = setTimeout(alerted, 750); }, 250);
+          return;
+        }
+        running();
         health.textContent = `Last refresh just now · ${count} refreshes`;
         timer = setTimeout(tick, 1000);
       }, 800);
@@ -651,7 +690,7 @@ kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; 
       btn.setAttribute('aria-label', paused ? 'Play the demo' : 'Pause the demo');
       icon.setAttribute('d', paused ? 'M4 2.2v9.6L12 7z' : 'M3.5 2v10M10.5 2v10');
       clearTimeout(timer);
-      if (!paused) timer = setTimeout(tick, 400);
+      if (!paused) timer = setTimeout(panel.dataset.state === 'alert' ? alerted : tick, 400);
     });
     if (!still) timer = setTimeout(tick, 1200);
   }

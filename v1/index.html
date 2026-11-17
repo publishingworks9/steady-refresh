@@ -115,7 +115,8 @@ h1 { font: 600 56px/1.04 var(--display); letter-spacing: -.035em; margin: 0; tex
 .ticks span { display: block; height: 100%; background: var(--signal); transform: scaleX(0); transform-origin: left; transition: transform 260ms linear, background-color 300ms; }
 .panel[data-state="held"] .ticks span { background: var(--p-hold); }
 .panel[data-state="alert"] .ticks span { background: var(--p-bad); }
-.phealth { display: flex; justify-content: space-between; margin-top: 10px; font-size: 12px; color: var(--p-muted); }
+.phealth { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 12px; color: var(--p-muted); }
+.phealth > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .phealth b { color: var(--p-ink); font-weight: 600; text-decoration: underline; text-decoration-color: rgba(255, 255, 255, .25); text-underline-offset: 3px; }
 
 .toast {
@@ -285,7 +286,7 @@ footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; g
         <li><time>09:15:00</time><i></i><span>Reloaded, back on schedule</span></li>
       </ol>
       </div>
-      <div class="health" aria-label="The popup's status line after a recovered reload"><i aria-hidden="true"></i><span><b>Last refresh 1 min ago</b> · 37 refreshes · 1 stalled load retried</span></div>
+      <div class="health" aria-label="The popup's status line after a recovered reload"><i aria-hidden="true"></i><span><b>Last refresh 1 min ago</b> · 37 refreshes</span></div>
       </div>
     </div>
   </section>
